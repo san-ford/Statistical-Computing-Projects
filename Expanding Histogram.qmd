@@ -1,0 +1,588 @@
+---
+title: "Homework 1"
+author: "Kevin Sanford"
+date: "10-16-2024"
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    code-line-numbers: true
+error: true
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+# Instructions
+
+-   This problem set contains 2 exercises in total.
+-   **You may only use functions from Base R to complete the
+    exercises**. Email Dr. Landeros (`alandero@ucr.edu`) if you have any
+    doubts.
+-   Check the Canvas Discussion section for updates.
+
+# Background
+
+Many problems in statistics are challenging precisely because at least
+one key distribution is either unknown or unavailable. Otherwise, many
+statistics and quantities of interest easy to calculate. We exploit this
+fact in constructing a data structure for *approximating* various
+statistics of a data stream.
+
+These two exercises problem guides you in constructing an *expanding
+histogram* that you can leverage in calculating quantiles. The idea is
+simple:
+
+1.  A user specifies the number of bins $b$ which **must** be even. This
+    information is used to construct $b-1$ *left-closed* bins and $1$
+    *closed* bin (the rightmost one):
+
+    ``` text
+    [a, b), [b, c), [c, d), [d, e]
+    ```
+
+    This numbers $a$, $b$, $c$, $d$, and $e$ are the *edges*.
+
+2.  Now suppose we start with the following bin counts:
+
+    ``` text
+    |1|2|5|3|
+    ```
+
+    where the extreme edges are $a$ and $e$.
+
+3.  We observe a data point $y$ and so we must update the histogram.
+    There are 3 cases to consider:
+
+    -   **Case:** $a \le y \le b$: The point lies inside the current
+        limits of the histogram, so we simply find the bin it belongs
+        to.
+
+        ``` text
+           *
+           ↓
+        |1|2|5|3|   --->   |1|3|5|3|
+        ```
+
+    -   **Case:** $y > b$: The point lies outside (to the right) of bin
+        edges.
+
+        ``` text
+        |1|2|5|3|       *
+        ```
+
+        We expand each bin to the right by doubling the edges. Adjacent
+        bins merge with their neighbors to the right. Multiple
+        expansions (doublings) may be required to cover the data:
+
+        ``` text
+        |1|2|5|3|       *
+         \ / \ / \ / \ /
+        | 3 | 8 | 0 | 1 |
+        ```
+
+    -   **Case:** $y < a$: This case is symmetric to the previous case,
+        except the histogram expands to the left.
+
+4.  Given our histogram and a probability $p \in [0,1]$, we perform a
+    *search* to find $x$ such that $\Pr(X \le x) \le p$. The value $x$
+    is an approximation of the target quantile.
+
+This exercise was inspired by Josh Day's and Hua Zhou's software
+package, OnlineStats.jl:
+
+> Day J, Zhou H (2020). OnlineStats.jl: A Julia package for statistics
+> on data streams. *Journal of Open Source Software*, 5(46), 1816, doi:
+> [10.21105/joss.01816](https://doi.org/10.21105/joss.01816)
+
+A few additional remarks:
+
+-   While we are not aiming for high performance within R, you should be
+    mindful of how you structure your code.
+
+-   We will create our own S3 class to represent an expanding histogram.
+    **We did not discuss S3 classes in lecture, so you do not need to
+    worry about these details.** The exercises will give you a sense of
+    how object-oriented programming works in R's S3 system, but all the
+    work has been done for you.
+
+-   Problem 1 is relatively more challenging than Problem 2.
+
+-   Problem 2 implements statistics for the expanding histogram. It is
+    written in a way that allows us to grade it independently of Problem
+    1, but you can test out the functions on the object you created.
+
+# Problem 1: An expanding histogram
+
+## Representing a histogram
+
+The `hist()` function in R is useful for plotting. In the background, it
+creates a `"histogram"` class object to fit a histogram to data. We can
+access this object by passing the `plot = FALSE` option to `hist()`.
+
+**Modify the code chunk below to do the following**:
+
+1.  Create a `"histogram"` object fit to the given data, `xdata`, as
+    described above.
+2.  Save this object to a variable called `myhist`.
+3.  Display `myhist` in your report.
+4.  *Below the code chunk*, write down the number of *fields* for this
+    object (do not count the `attr(,"class")` which appears).
+
+Study these fields, and consult `help("hist")` if you need
+clarification.
+
+```{r}
+set.seed(206)
+xdata <- rnorm(100)
+myhist <- hist(xdata, plot = FALSE)
+plot(myhist)
+```
+
+6 fields exist for this object.
+
+## Writing our own representation
+
+We begin by defining a data structure to represent the expanding
+histogram. **Complete the function below by filling in the following
+details**
+
+-   The function should accept a single argument, `N`, which represents
+    the number of bins. \*Remember than `N` should be even.
+
+-   Create a `list` object named `h` to represent the expanding
+    histogram.
+
+-   The `list` should have the following fields:
+
+    -   `n`, the number of observations used to estimate the histogram.
+
+    -   `edges`, a vector of length `N+1` representing the bin edges.
+        Initialize to be `0` everywhere.
+
+    -   `counts`, a vector of length `N` representing the counts in each
+        bin. Initialize to be `0` everywhere.
+
+```{r}
+init_expanding_hist <- function (N) {
+  edges <- rep(0, N+1)
+  counts <- rep(0, N)
+  h <- list(n = 0, edges = edges, counts = counts)
+  # Make it an S3 class
+  class(h) <- "expanding_hist"
+  return(h)
+}
+```
+
+## Finding the correct bin
+
+Now that we've outlined an interface, let's begin by handling placement
+into bins.
+
+Write a function called `find_bin_index()` that identifies the bin which
+covers a new observation `y`. *This function will not do any expanding,
+it only retrieves a number indicating a bin.*
+
+-   It should accept two inputs: `edges` and `y`.
+-   First, handle all the exceptional cases. Two examples
+    (non-exhaustive):
+    -   If `y` lies to the left of the histogram, the bin index is `0`
+        because it is outside.
+    -   If `y` is equal to the rightmost *edge*, it is inside the
+        histogram. What is the bin number?
+-   Lastly, use `findInterval()` to recover the bin index within the
+    histogram.
+-   This function should return a single number, the bin index.
+
+```{r}
+find_bin_index <- function(edges, y) {
+  if (y < edges[1]) {
+    return (0)
+  }
+  if (y > edges[length(edges)]) {
+    return (length(edges))
+  }
+  bin_number <- findInterval(y, edges, rightmost.closed = TRUE)
+  return(bin_number)
+}
+
+```
+
+## Merging Left
+
+Next we handle the case in which the histogram had to be expanded to
+cover a new observation.
+
+Write a function called `merge_left()` which merges bin `counts`,
+*starting from the rightmost bin and moving towards the leftmost one*.
+This procedure requires three pieces of information:
+
+-   `counts`, the bin counts.
+-   `K`, the number of times the histogram was expanded.
+-   `M`, the middle bin index ($M = N / 2$ since $N$ is even).
+-   Return the modified counts.
+
+**Hints**:
+
+-   Assume `K` and `M` are given to you and that they are correctly
+    computed.
+-   What does `K` tell you about the number of required merges? What
+    about `M`?
+-   This procedure requires two loops.
+
+```{r}
+merge_left <- function(counts, K, M) {
+  # define pointer to keep track of elements to merge
+  p <- length(counts)
+  # define stopping point for merges
+  if (K > 0) {
+    s <- M + floor(M/(2^K))
+  }
+  else{
+    s <- M
+  }
+  # merge bins from the right and rewrite into counts
+  for (i in length(counts):(s+1)) {
+    counts[i] <- counts[p] + counts[p-1]
+    # move pointer
+    p <- p - 2
+  }
+  for (i in s:1) {
+    counts[i] <- 0
+  }
+  return(counts)
+}
+
+```
+
+## Merging Right
+
+Now we handle the other expansion case.
+
+Write a function called `merge_right()` which merges bin `counts`,
+*starting from the leftmost bin and moving towards the rightmost one*.
+
+```{r}
+merge_right <- function(counts, K, M) {
+  # define pointer to keep track of elements to merge
+  p <- 1
+  # define stopping point for merges
+  s <- ceiling(M/(2^K))
+  # merge bins from the left and rewrite into counts
+  for (i in 1:s) {
+    counts[i] <- counts[p] + counts[p+1]
+    # move pointer
+    p <- p + 2
+  }
+  for (i in (s+1):length(counts)) {
+    counts[i] <- 0
+  }
+  return(counts)
+}
+
+```
+
+## Expanding the histogram
+
+Next, we combine the merge functions to handle the expansion logic.
+
+Finish implementing the `expand()` function below, using the comments as
+a guide.
+
+**Hints**:
+
+-   This function must check which direction to expand in.
+-   Expansion should modify the `edges` and `counts` fields only.
+-   We may not need to modify `h` at all. When is this the case?
+-   Respect the interface: you do not need additional inputs.
+-   Note an important invariant: If we expand, exactly one of the
+    extreme edges remains fixed.
+-   If the current width of the histogram is $0$, then use the new width
+    implied by the update due to the new observation `y`.
+
+```{r}
+# Inputs:
+#  h, an expanding_hist object
+#  y, a new observation
+# Output:
+#  h, the expanding_hist object
+expand <- function (h, y) {
+  # Retrieve extreme edges
+  a <- h$edges[1]
+  b <- h$edges[length(h$edges)]
+  
+  # if the histogram does not need to be expanded, do nothing
+  if (y >= a && y <= b) {
+    return (h)
+  }
+  
+  # Compute the width of the histogram
+  w <- b - a
+  # Calculate the middle bin index, M
+  M <- length(h$counts)/2
+  # initialize K
+  K <- 0
+  # calculate new bin width
+  binw <- 2*(b-a)/length(h$counts)
+  E <- length(h$edges)
+
+  # Expand to the right by finding K such that
+  # y <= a + 2^K * w
+  if (y > b) {
+    while (y > a + (2^K)*w) {
+      # expand histogram to the right
+      h$counts <- merge_right(h$counts, K, M)
+      # apply new bin width
+      for (i in 2:E) {
+        h$edges[i] <- h$edges[1] + (i-1)*binw
+      }
+      # double bin width for next iteration
+      binw <- binw*2
+      K <- K + 1
+    }
+  }
+  # Expand to the left by finding K such that
+  # y >= b - 2^K * w
+  if (y < a) {
+    while (y < b - (2^K)*w) {
+      # expand histogram to the left
+      h$counts <- merge_left(h$counts, K, M)
+      # apply new bin width
+      for (i in (E-1):1) {
+        h$edges[i] <- h$edges[E] - (E-i)*binw
+      }
+      # double bin width for next iteration
+      binw <- binw*2
+      K <- K + 1
+    }
+  }
+
+  return(h)
+}
+```
+
+## Putting it all together
+
+Fill in the details for the function below to complete the `fit()`
+function.
+
+```{r}
+fit <- function (h, y) {
+  stopifnot(is.finite(y))
+  h$n <- h$n + 1
+  N <- length(h$counts)
+
+  if (h$n == 1) {
+    # Case: Starting with a fresh histogram.
+    # There is only 1 bin, so all edges are equal to each other.
+    h$edges <- rep(y,length(h$edges))
+    h$counts[N] <- h$counts[N] + 1
+  } else if (all(h$edges == h$edges[1])) {
+    # Case: We've never expanded before.
+    a <- h$edges[1]
+    if (y == a) {
+      # Don't need to expand.
+      h$counts[N] <- h$counts[N] + 1
+    } else if (y < a) {
+      # Expand once to the left.
+      h$edges[1] <- y
+      # set equal bin widths between a and y
+      h$edges <- seq(y, a, length = length(h$edges))
+      h$counts[1] <- 1
+    } else {
+      # Expand once to the right.
+      h$edges[N] <- y
+      # set equal bin widths between a and y
+      h$edges <- seq(a, y, length = length(h$edges))
+      # new value took the count from the old value
+      # this statement recounts the old value
+      h$counts[1] <- 1
+    }
+  } else {
+    # expand before we update the counts.
+    h <- expand(h,y)
+    # find where y belongs in the expanded histogram
+    yi <- find_bin_index(h$edges,y)
+    h$counts[yi] <- h$counts[yi] + 1
+  }
+
+  return(h)
+}
+```
+
+Test your implementation on the following test case. **Do not modify the
+seed or settings.**
+
+**Expected output**:
+
+-   $n = 1000$
+-   $\min(\text{Edges}) \approx -2.438$
+-   $\max(\text{Edges}) \approx 13.258$
+-   $\text{Counts} = {0, 11, 221, 558, 201, 9, 0, 0, 0, 0}$
+
+```{r}
+#| label: test-expanding-hist
+set.seed(1903)
+y <- rnorm(1000, mean = 3, sd = 1.016)
+h <- init_expanding_hist(10)
+h
+
+for (yi in y) {
+  h <- fit(h, yi)
+}
+h
+```
+
+# Problem 2: Evaluating sample statistics
+
+Now we implement functions to calculate descriptive statistics using our
+empirical estimate of a distribution. This problem provides some code so
+you can test your histogram implementation, but it is graded
+independently of Problem 1.
+
+Using `seed = 1903` in code chunk @test-expanding-hist, we have the
+following:
+
+| $n$  | $N$  | $\mu_{n}$ | $s_{n}^{2}$ | $Q_{0.5}$ |
+|------|------|-----------|-------------|-----------|
+| 1000 | 10   | 3.017902  | 1.544215    | 3.016752  |
+| 1000 | 100  | 3.004404  | 1.042367    | 3.009793  |
+| 1000 | 1000 | 3.000385  | 1.017131    | 2.984907  |
+
+## Midpoint interpolation
+
+Each of the histogram bins represents a range of values. We will
+calculate statistics based on the *midpoints* of each implied interval.
+For example, the bins $$
+\{[a, b), [b,c), [c, d]\}
+$$ have midpoints $(a+b)/2$, $(b+c)/2$, and $(c+d)/2$.
+
+Write a function to compute the $N$ midpoints of a length $N+1$ vector
+`x`, called `compute_midpoints()`. You may assume `x` is sorted.
+
+**Do not modify here**
+
+```{r}
+# Declare a new generic
+midpoints <- function (x) {
+  UseMethod("midpoints")
+}
+
+# Default behavior: assume input is a vector
+midpoints.default <- function (x) {
+  compute_midpoints(x)
+}
+
+# S3 dispatch for expanding_hist
+midpoints.expanding_hist <- function (h) {
+  return(midpoints(h$edges))
+}
+```
+
+**Your implementation**
+
+```{r}
+compute_midpoints <- function(x) {
+  M <- x[1:(length(x)-1)]
+  M <- (M + x[2:length(x)])/2 
+  return (M)
+}
+```
+
+## Mean
+
+Given a collection of histogram midpoints `x` and frequencies `w`,
+compute the weighted mean of `x`. Call your function `compute_wmean()`.
+
+::: callout-tip
+### Hint
+
+Think carefully about what *is* and *isn't* an observation in computing
+this statistic.
+:::
+
+**Do not modify here**
+
+```{r}
+mean.expanding_hist <- function (h, ...) {
+  compute_wmean(midpoints(h), h$counts)
+}
+```
+
+**Your implementation**
+
+```{r}
+compute_wmean <- function(x, w) {
+  mu <- sum(x*w)/sum(w)
+  return (mu)
+}
+```
+
+## Variance
+
+Given a collection of histogram midpoints `x` and frequencies `w`,
+compute the weighted variance of `x`. Call your function
+`compute_wvar()`.
+
+::: callout-tip
+### Hint
+
+There is an opportunity to cleverly reuse your `compute_mean()` function
+here.
+:::
+
+**Do not modify here**
+
+```{r}
+var <- function (x, y = NULL, na.rm = FALSE, use) { UseMethod("var") }
+
+registerS3method("var", "default", stats::var)
+
+var.expanding_hist <- function (h, ...) {
+  compute_wvar(midpoints(h), h$counts)
+}
+```
+
+**Your implementation**
+
+```{r}
+compute_wvar <- function(x, w) {
+  # retrieve weighted mean
+  mu <- compute_wmean(x, w)
+  wvar <- sum(w*(x-mu)^2)/sum(w)
+  return(wvar)
+}
+```
+
+## Quantiles
+
+Given a collection of histogram midpoints `x`, frequencies `w`, and
+probabilities `p`, compute the weighted quantiles of `x`. Call your
+function `compute_wquantile()`.
+
+::: callout-tip
+### Hint
+
+You may use the `weighted.quantile()` function from the
+[descriptio](https://cran.r-project.org/web/packages/descriptio/index.html)
+package.
+:::
+
+**Do not modify here**
+
+```{r}
+quantile.expanding_hist <- function (h, probs, ...) {
+  compute_wquantile(midpoints(h), h$counts, probs)
+}
+```
+
+**Your implementation**
+
+```{r}
+library(descriptio)
+compute_wquantile <- function(x, w, p) {
+  return (descriptio::weighted.quantile(x, w, p))
+}
+```
+
